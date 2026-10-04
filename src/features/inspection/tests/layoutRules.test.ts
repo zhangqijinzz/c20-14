@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createPlan, createItem } from '../../../shared/models'
-import { analyzeLayout, getItemBounds, normalizeRotation } from '../../../shared/layoutRules'
+import { analyzeLayout, getItemBounds, getItemPolygon, normalizeRotation, polygonsOverlap } from '../../../shared/layoutRules'
 
 describe('workspace rules', () => {
   it('normalizes rotation and calculates rotated bounds around the item center', () => {
@@ -21,6 +21,36 @@ describe('workspace rules', () => {
     expect(analysis.overlapIds).toEqual(expect.arrayContaining([first.id, second.id]))
     expect(analysis.outOfBoundsIds).toContain(outside.id)
     expect(analysis.status).toBe('attention')
+  })
+
+  it('ignores empty space inside rotated bounding boxes', () => {
+    const plan = createPlan('test', false)
+    const first = { ...createItem('speaker'), x: 85, y: 85, widthMm: 100, heightMm: 100, rotation: 30 }
+    const second = { ...createItem('lamp'), x: 180, y: 180, widthMm: 100, heightMm: 100, rotation: -30 }
+    const analysis = analyzeLayout({ ...plan, items: [first, second] })
+    expect(analysis.overlapIds).toEqual([])
+    expect(analysis.status).toBe('clear')
+  })
+
+  it('uses rotated rectangle shapes when detecting real overlap', () => {
+    const first = { ...createItem('speaker'), x: 0, y: 0, widthMm: 100, heightMm: 100, rotation: 0 }
+    const second = { ...createItem('lamp'), x: 50, y: 50, widthMm: 100, heightMm: 100, rotation: 45 }
+    expect(polygonsOverlap(getItemPolygon(first), getItemPolygon(second))).toBe(true)
+  })
+
+  it('keeps the close-placement tolerance for rotated rectangles', () => {
+    const first = { ...createItem('speaker'), x: 0, y: 0, widthMm: 100, heightMm: 100, rotation: 0 }
+    const second = { ...createItem('lamp'), x: 117.5, y: 0, widthMm: 100, heightMm: 100, rotation: 30 }
+    expect(polygonsOverlap(getItemPolygon(first), getItemPolygon(second))).toBe(false)
+  })
+
+  it('returns the same result when item order changes', () => {
+    const plan = createPlan('test', false)
+    const first = { ...createItem('speaker'), x: 85, y: 85, widthMm: 100, heightMm: 100, rotation: 30 }
+    const second = { ...createItem('lamp'), x: 180, y: 180, widthMm: 100, heightMm: 100, rotation: -30 }
+    const direct = analyzeLayout({ ...plan, items: [first, second] })
+    const swapped = analyzeLayout({ ...plan, items: [second, first] })
+    expect(swapped.overlapIds).toEqual(direct.overlapIds)
   })
 
   it('returns a healthy state for separated items', () => {

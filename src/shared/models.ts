@@ -27,6 +27,13 @@ export interface WorkspaceDocument {
   activePlanId: string
 }
 
+export interface Point {
+  x: number
+  y: number
+}
+
+export type ItemPolygon = Point[]
+
 export interface ItemBounds {
   left: number
   top: number
