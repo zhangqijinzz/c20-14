@@ -1,5 +1,13 @@
 import type { DeskItem, ItemBounds, LayoutAnalysis, WorkspacePlan } from './models'
 
+// 重叠超过 1mm 才算冲突：贴得很近（≤1mm）视为正常摆放。
+const OVERLAP_TOLERANCE_MM = 1
+
+interface Point {
+  x: number
+  y: number
+}
+
 export function normalizeRotation(rotation: number): number {
   const normalized = rotation % 360
   return normalized < 0 ? normalized + 360 : normalized
@@ -21,10 +29,57 @@ export function getItemBounds(item: DeskItem): ItemBounds {
   }
 }
 
-export function rectanglesOverlap(first: ItemBounds, second: ItemBounds): boolean {
-  const horizontal = Math.min(first.right, second.right) - Math.max(first.left, second.left)
-  const vertical = Math.min(first.bottom, second.bottom) - Math.max(first.top, second.top)
-  return horizontal > 1 && vertical > 1
+// 设备旋转后的真实四角（绕中心旋转），用于精确的重叠判断。
+export function getItemCorners(item: DeskItem): Point[] {
+  const radians = (normalizeRotation(item.rotation) * Math.PI) / 180
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+  const centerX = item.x + item.widthMm / 2
+  const centerY = item.y + item.heightMm / 2
+  const halfWidth = item.widthMm / 2
+  const halfHeight = item.heightMm / 2
+  return [
+    { x: -halfWidth, y: -halfHeight },
+    { x: halfWidth, y: -halfHeight },
+    { x: halfWidth, y: halfHeight },
+    { x: -halfWidth, y: halfHeight },
+  ].map((corner) => ({
+    x: centerX + corner.x * cos - corner.y * sin,
+    y: centerY + corner.x * sin + corner.y * cos,
+  }))
+}
+
+function projectCorners(corners: Point[], axis: Point): { min: number; max: number } {
+  let min = Infinity
+  let max = -Infinity
+  corners.forEach((corner) => {
+    const projection = corner.x * axis.x + corner.y * axis.y
+    min = Math.min(min, projection)
+    max = Math.max(max, projection)
+  })
+  return { min, max }
+}
+
+// 分离轴定理：对两个旋转矩形，只要在任一分离轴上的投影重叠
+// 不超过宽容度，就视为未冲突；全部轴都超过才判定重叠。
+// 未旋转时分离轴即 x/y 轴，结果与原来的外框判断完全一致。
+export function itemsOverlap(first: DeskItem, second: DeskItem): boolean {
+  const firstCorners = getItemCorners(first)
+  const secondCorners = getItemCorners(second)
+  const axes = [first, second].flatMap((item) => {
+    const radians = (normalizeRotation(item.rotation) * Math.PI) / 180
+    const cos = Math.cos(radians)
+    const sin = Math.sin(radians)
+    return [
+      { x: cos, y: sin },
+      { x: -sin, y: cos },
+    ]
+  })
+  return axes.every((axis) => {
+    const firstRange = projectCorners(firstCorners, axis)
+    const secondRange = projectCorners(secondCorners, axis)
+    return Math.min(firstRange.max, secondRange.max) - Math.max(firstRange.min, secondRange.min) > OVERLAP_TOLERANCE_MM
+  })
 }
 
 export function analyzeLayout(plan: WorkspacePlan): LayoutAnalysis {
@@ -44,9 +99,7 @@ export function analyzeLayout(plan: WorkspacePlan): LayoutAnalysis {
     for (let nextIndex = index + 1; nextIndex < plan.items.length; nextIndex += 1) {
       const first = plan.items[index]
       const second = plan.items[nextIndex]
-      const firstBounds = bounds.get(first.id)
-      const secondBounds = bounds.get(second.id)
-      if (firstBounds && secondBounds && rectanglesOverlap(firstBounds, secondBounds)) {
+      if (itemsOverlap(first, second)) {
         overlapIds.add(first.id)
         overlapIds.add(second.id)
       }
